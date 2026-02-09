@@ -21,8 +21,13 @@ const api: AxiosInstance = axios.create({
 // Request interceptor: Add token to Authorization header if present
 api.interceptors.request.use(
   (config) => {
-    // Token is sent automatically in httpOnly cookies via withCredentials
-    // No need to manually attach it
+    // Get token from localStorage and attach to Authorization header
+    if (typeof window !== 'undefined') {
+      const token = localStorage.getItem('token');
+      if (token) {
+        config.headers.Authorization = `Bearer ${token}`;
+      }
+    }
     return config;
   },
   (error) => {
@@ -37,8 +42,10 @@ api.interceptors.response.use(
   },
   (error: AxiosError) => {
     if (error.response?.status === 401) {
-      // Token expired or invalid - redirect to signin
+      // Token expired or invalid - clear localStorage and redirect to signin
       if (typeof window !== 'undefined') {
+        localStorage.removeItem('token');
+        localStorage.removeItem('user');
         window.location.href = '/auth/signin';
       }
     }
@@ -105,9 +112,30 @@ export async function signinUser(
 
 /**
  * Helper function for signout API call
+ *
+ * Requires valid JWT token in Authorization header.
+ * Clears token from localStorage after successful signout.
  */
-export async function signoutUser() {
-  return api.post('/auth/signout');
+export async function signoutUser(): Promise<void> {
+  // Get token from localStorage to include in request
+  const token = typeof window !== 'undefined' ? localStorage.getItem('token') : null;
+
+  if (!token) {
+    throw new Error('No authentication token found');
+  }
+
+  // Call signout endpoint with token in Authorization header
+  await api.post('/api/v1/auth/signout', {}, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  });
+
+  // Clear token from localStorage on success
+  if (typeof window !== 'undefined') {
+    localStorage.removeItem('token');
+    localStorage.removeItem('user');
+  }
 }
 
 /**

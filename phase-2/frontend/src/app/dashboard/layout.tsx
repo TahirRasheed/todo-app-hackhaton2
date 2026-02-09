@@ -8,6 +8,7 @@ import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { User } from '@/types/api'
 import { getToken, clearToken } from '@/lib/api-client'
+import SignoutButton from '@/components/SignoutButton'
 
 interface DashboardLayoutProps {
   children: React.ReactNode
@@ -32,11 +33,6 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
     setLoading(false)
   }, [router])
 
-  const handleSignout = async () => {
-    clearToken()
-    router.push('/auth/signin')
-  }
-
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
@@ -54,12 +50,7 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
             <h1 className="text-2xl font-bold text-gray-900">Todo App</h1>
             {user && <p className="text-sm text-gray-600">Welcome, {user.email}</p>}
           </div>
-          <button
-            onClick={handleSignout}
-            className="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 transition"
-          >
-            Sign Out
-          </button>
+          <SignoutButton />
         </div>
       </header>
 

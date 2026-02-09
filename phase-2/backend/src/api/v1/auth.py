@@ -1,10 +1,11 @@
 """Authentication endpoints (signup, signin, signout)"""
 from fastapi import APIRouter, HTTPException, Depends, status
+from fastapi.security import HTTPBearer, HTTPAuthCredentials
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.db.session import get_session
 from src.schemas.user import UserSignup, UserSignin, UserTokenResponse
-from src.security.jwt import create_access_token
+from src.security.jwt import create_access_token, verify_token
 from src.security.password import hash_password, validate_password_strength
 from src.services.user_service import UserService
 
@@ -159,11 +160,42 @@ async def signin(
 
 
 @router.post("/signout", status_code=status.HTTP_200_OK)
-async def signout():
+async def signout(credentials: HTTPAuthCredentials = Depends(HTTPBearer())):
     """
-    Sign out user (client handles token removal).
+    Sign out user - validates JWT token and returns success.
+
+    Since we use stateless JWT tokens, this endpoint validates the token
+    and returns success. Client is responsible for removing the token from storage.
+
+    Security:
+    - Requires valid JWT token in Authorization: Bearer <token> header
+    - Verifies token signature and expiration
+    - Returns 401 if token is invalid or missing
+
+    Args:
+        credentials: JWT credentials from Authorization header
 
     Returns:
-        Success message
+        Success message: {"message": "Signed out successfully"}
+
+    Raises:
+        HTTPException 401: Invalid or missing token
     """
+    if not credentials or not credentials.credentials:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing authentication token",
+            headers={"WWW-Authenticate": "Bearer"}
+        )
+
+    # Verify token is valid
+    try:
+        verify_token(credentials.credentials)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=str(e),
+            headers={"WWW-Authenticate": "Bearer"}
+        )
+
     return {"message": "Signed out successfully"}
