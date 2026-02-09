@@ -517,3 +517,341 @@ class TestSignoutFlow:
 
         # Should fail with 401 (no token provided)
         assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+class TestProtectedEndpointsValidation:
+    """Integration tests for JWT validation on protected task endpoints"""
+
+    async def test_missing_authorization_header_returns_401(
+        self, async_client: AsyncClient, session: AsyncSession
+    ):
+        """Test protected endpoints return 401 when Authorization header is missing"""
+        # Create user to get user_id
+        response = await async_client.post(
+            "/api/v1/auth/signup",
+            json={
+                "email": "notoken@example.com",
+                "password": "SecurePass123",
+                "name": "No Token User"
+            }
+        )
+        assert response.status_code == 201
+        user_id = response.json()["id"]
+
+        # Test all task endpoints without Authorization header
+        endpoints = [
+            ("GET", f"/api/v1/users/{user_id}/tasks"),
+            ("POST", f"/api/v1/users/{user_id}/tasks", {"title": "Test Task"}),
+            ("GET", f"/api/v1/users/{user_id}/tasks/550e8400-e29b-41d4-a716-446655440000"),
+            ("PUT", f"/api/v1/users/{user_id}/tasks/550e8400-e29b-41d4-a716-446655440000", {"title": "Updated"}),
+            ("DELETE", f"/api/v1/users/{user_id}/tasks/550e8400-e29b-41d4-a716-446655440000"),
+        ]
+
+        for method, url, *body in endpoints:
+            if method == "GET":
+                response = await async_client.get(url)
+            elif method == "POST":
+                response = await async_client.post(url, json=body[0])
+            elif method == "PUT":
+                response = await async_client.put(url, json=body[0])
+            elif method == "DELETE":
+                response = await async_client.delete(url)
+
+            assert response.status_code == 401, f"{method} {url} should return 401 without token"
+
+    async def test_invalid_bearer_format_returns_401(
+        self, async_client: AsyncClient, session: AsyncSession
+    ):
+        """Test protected endpoints return 401 for invalid Bearer token format"""
+        # Create user to get user_id
+        response = await async_client.post(
+            "/api/v1/auth/signup",
+            json={
+                "email": "invalidformat@example.com",
+                "password": "SecurePass123",
+                "name": "Invalid Format User"
+            }
+        )
+        assert response.status_code == 201
+        user_id = response.json()["id"]
+
+        # Test various invalid Authorization header formats
+        invalid_headers = [
+            {"Authorization": "InvalidTokenNoBearer"},
+            {"Authorization": "Bearer"},  # Missing token
+            {"Authorization": "bearer token"},  # Lowercase bearer
+            {"Authorization": "Token abc123"},  # Wrong scheme
+        ]
+
+        for headers in invalid_headers:
+            response = await async_client.get(
+                f"/api/v1/users/{user_id}/tasks",
+                headers=headers
+            )
+            assert response.status_code == 401, f"Should return 401 for invalid format: {headers}"
+
+    async def test_invalid_token_signature_returns_401(
+        self, async_client: AsyncClient, session: AsyncSession
+    ):
+        """Test protected endpoints return 401 for tokens with invalid signature"""
+        # Create user to get user_id
+        response = await async_client.post(
+            "/api/v1/auth/signup",
+            json={
+                "email": "invalidsig@example.com",
+                "password": "SecurePass123",
+                "name": "Invalid Sig User"
+            }
+        )
+        assert response.status_code == 201
+        user_id = response.json()["id"]
+
+        # Use completely invalid token
+        invalid_token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ0ZXN0In0.invalid_signature"
+
+        response = await async_client.get(
+            f"/api/v1/users/{user_id}/tasks",
+            headers={"Authorization": f"Bearer {invalid_token}"}
+        )
+
+        assert response.status_code == 401
+        assert "invalid" in response.text.lower() or "authentication" in response.text.lower()
+
+    async def test_expired_token_returns_401(
+        self, async_client: AsyncClient, session: AsyncSession
+    ):
+        """Test protected endpoints return 401 for expired tokens"""
+        from datetime import datetime, timedelta, timezone
+        from jose import jwt
+        from src.config import settings
+
+        # Create user to get user_id
+        response = await async_client.post(
+            "/api/v1/auth/signup",
+            json={
+                "email": "expiredtoken@example.com",
+                "password": "SecurePass123",
+                "name": "Expired Token User"
+            }
+        )
+        assert response.status_code == 201
+        user_id = response.json()["id"]
+
+        # Create expired token (expired 1 hour ago)
+        now = datetime.now(timezone.utc)
+        expired_at = now - timedelta(hours=1)
+
+        payload = {
+            "sub": user_id,
+            "email": "expiredtoken@example.com",
+            "iat": int((now - timedelta(hours=2)).timestamp()),
+            "exp": int(expired_at.timestamp()),
+            "iss": "todo-app",
+            "aud": "todo-app-users",
+        }
+
+        expired_token = jwt.encode(
+            payload,
+            settings.JWT_SECRET,
+            algorithm=settings.JWT_ALGORITHM,
+        )
+
+        # Try to access protected endpoint with expired token
+        response = await async_client.get(
+            f"/api/v1/users/{user_id}/tasks",
+            headers={"Authorization": f"Bearer {expired_token}"}
+        )
+
+        assert response.status_code == 401
+        assert "invalid" in response.text.lower() or "authentication" in response.text.lower()
+
+    async def test_token_without_required_claims_returns_401(
+        self, async_client: AsyncClient, session: AsyncSession
+    ):
+        """Test protected endpoints return 401 for tokens missing required claims (sub)"""
+        from datetime import datetime, timedelta, timezone
+        from jose import jwt
+        from src.config import settings
+
+        # Create user to get user_id
+        response = await async_client.post(
+            "/api/v1/auth/signup",
+            json={
+                "email": "noclaims@example.com",
+                "password": "SecurePass123",
+                "name": "No Claims User"
+            }
+        )
+        assert response.status_code == 201
+        user_id = response.json()["id"]
+
+        # Create token without 'sub' claim
+        now = datetime.now(timezone.utc)
+        payload = {
+            # Missing "sub" claim
+            "email": "noclaims@example.com",
+            "iat": int(now.timestamp()),
+            "exp": int((now + timedelta(minutes=15)).timestamp()),
+            "iss": "todo-app",
+            "aud": "todo-app-users",
+        }
+
+        token_no_sub = jwt.encode(
+            payload,
+            settings.JWT_SECRET,
+            algorithm=settings.JWT_ALGORITHM,
+        )
+
+        # Try to access protected endpoint
+        response = await async_client.get(
+            f"/api/v1/users/{user_id}/tasks",
+            headers={"Authorization": f"Bearer {token_no_sub}"}
+        )
+
+        assert response.status_code == 401
+        assert "invalid" in response.text.lower() or "authentication" in response.text.lower()
+
+    async def test_valid_token_allows_access_to_protected_endpoints(
+        self, async_client: AsyncClient, session: AsyncSession
+    ):
+        """Test valid JWT token allows access to protected task endpoints"""
+        # Create user and get valid token
+        response = await async_client.post(
+            "/api/v1/auth/signup",
+            json={
+                "email": "validtoken@example.com",
+                "password": "SecurePass123",
+                "name": "Valid Token User"
+            }
+        )
+        assert response.status_code == 201
+        data = response.json()
+        token = data["token"]
+        user_id = data["id"]
+
+        # Test access to list tasks endpoint with valid token
+        response = await async_client.get(
+            f"/api/v1/users/{user_id}/tasks",
+            headers={"Authorization": f"Bearer {token}"}
+        )
+
+        # Should succeed with 200
+        assert response.status_code == 200
+        assert response.json()["success"] is True
+
+        # Test create task endpoint with valid token
+        response = await async_client.post(
+            f"/api/v1/users/{user_id}/tasks",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"title": "Test Task", "description": "Test Description"}
+        )
+
+        # Should succeed with 201
+        assert response.status_code == 201
+        assert response.json()["success"] is True
+
+    async def test_token_for_different_user_fails_ownership_check(
+        self, async_client: AsyncClient, session: AsyncSession
+    ):
+        """Test JWT token for different user fails ownership validation (403)"""
+        # Create first user
+        response1 = await async_client.post(
+            "/api/v1/auth/signup",
+            json={
+                "email": "user1@example.com",
+                "password": "SecurePass123",
+                "name": "User One"
+            }
+        )
+        assert response1.status_code == 201
+        user1_id = response1.json()["id"]
+        user1_token = response1.json()["token"]
+
+        # Create second user
+        response2 = await async_client.post(
+            "/api/v1/auth/signup",
+            json={
+                "email": "user2@example.com",
+                "password": "SecurePass123",
+                "name": "User Two"
+            }
+        )
+        assert response2.status_code == 201
+        user2_id = response2.json()["id"]
+
+        # Try to access user2's tasks with user1's token
+        response = await async_client.get(
+            f"/api/v1/users/{user2_id}/tasks",
+            headers={"Authorization": f"Bearer {user1_token}"}
+        )
+
+        # Should fail with 403 Forbidden (ownership check)
+        assert response.status_code == 403
+        assert "forbidden" in response.text.lower() or "access denied" in response.text.lower()
+
+    async def test_all_task_endpoints_require_authentication(
+        self, async_client: AsyncClient, session: AsyncSession
+    ):
+        """Test all task CRUD endpoints require valid JWT authentication"""
+        from uuid import uuid4
+
+        # Create user and get token
+        response = await async_client.post(
+            "/api/v1/auth/signup",
+            json={
+                "email": "allendpoints@example.com",
+                "password": "SecurePass123",
+                "name": "All Endpoints User"
+            }
+        )
+        assert response.status_code == 201
+        data = response.json()
+        token = data["token"]
+        user_id = data["id"]
+
+        # Create a task first (for get/update/delete tests)
+        create_response = await async_client.post(
+            f"/api/v1/users/{user_id}/tasks",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"title": "Test Task", "description": "For endpoint tests"}
+        )
+        assert create_response.status_code == 201
+        task_id = create_response.json()["data"]["id"]
+
+        # Test all endpoints with valid token (should all succeed or return proper errors)
+        test_cases = [
+            ("GET", f"/api/v1/users/{user_id}/tasks", None, 200),
+            ("POST", f"/api/v1/users/{user_id}/tasks", {"title": "New Task"}, 201),
+            ("GET", f"/api/v1/users/{user_id}/tasks/{task_id}", None, 200),
+            ("PUT", f"/api/v1/users/{user_id}/tasks/{task_id}", {"title": "Updated Task"}, 200),
+            ("DELETE", f"/api/v1/users/{user_id}/tasks/{task_id}", None, 204),
+        ]
+
+        for method, url, body, expected_status in test_cases:
+            if method == "GET":
+                response = await async_client.get(
+                    url,
+                    headers={"Authorization": f"Bearer {token}"}
+                )
+            elif method == "POST":
+                response = await async_client.post(
+                    url,
+                    headers={"Authorization": f"Bearer {token}"},
+                    json=body
+                )
+            elif method == "PUT":
+                response = await async_client.put(
+                    url,
+                    headers={"Authorization": f"Bearer {token}"},
+                    json=body
+                )
+            elif method == "DELETE":
+                response = await async_client.delete(
+                    url,
+                    headers={"Authorization": f"Bearer {token}"}
+                )
+
+            assert response.status_code == expected_status, (
+                f"{method} {url} expected {expected_status}, got {response.status_code}"
+            )

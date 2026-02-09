@@ -111,3 +111,7 @@ def is_token_expired(token: str) -> bool:
         return True
     except Exception:
         return True
+
+
+# Alias for compatibility with deps.py
+decode_token = verify_token
