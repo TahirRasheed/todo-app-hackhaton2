@@ -3,7 +3,7 @@ from fastapi import APIRouter, HTTPException, Depends, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.db.session import get_session
-from src.schemas.user import UserSignup, UserTokenResponse
+from src.schemas.user import UserSignup, UserSignin, UserTokenResponse
 from src.security.jwt import create_access_token
 from src.security.password import hash_password, validate_password_strength
 from src.services.user_service import UserService
@@ -97,21 +97,27 @@ async def signup(
 
 @router.post("/signin", status_code=status.HTTP_200_OK, response_model=UserTokenResponse)
 async def signin(
-    user_data: UserSignup,
+    user_data: UserSignin,
     session: AsyncSession = Depends(get_session)
 ):
     """
     Authenticate user and issue JWT token.
 
+    Security:
+    - Returns generic error message for both "email not found" and "wrong password"
+      to prevent user enumeration attacks
+    - Uses constant-time password comparison via bcrypt to prevent timing attacks
+    - JWT token issued with 900 second expiration
+
     Args:
-        user_data: Email and password
+        user_data: UserSignin schema (email, password)
         session: Database session
 
     Returns:
-        UserTokenResponse with user data + JWT token
+        UserTokenResponse with user data + JWT token + expiresIn
 
     Raises:
-        HTTPException 401: Invalid credentials
+        HTTPException 401: Invalid email or password (generic message)
         HTTPException 500: Server error
     """
     try:

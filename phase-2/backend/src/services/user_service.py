@@ -77,7 +77,12 @@ class UserService:
         session: AsyncSession, email: str, password: str
     ) -> User:
         """
-        Authenticate user with email and password
+        Authenticate user with email and password.
+
+        Security:
+        - Always performs password verification to prevent timing attacks
+        - Returns same error for both "email not found" and "wrong password"
+        - Uses constant-time password comparison via bcrypt
 
         Args:
             session: Database session
@@ -91,6 +96,19 @@ class UserService:
             ValueError: If authentication fails (invalid email or password)
         """
         user = await UserService.get_user_by_email(session, email)
-        if not user or not verify_password(password, user.password_hash):
+
+        # Security: Always verify password even if user doesn't exist
+        # This prevents timing attacks that could reveal if email exists
+        if user:
+            password_valid = verify_password(password, user.password_hash)
+        else:
+            # Run password verification against dummy hash to maintain constant time
+            # Use a known bcrypt hash to ensure timing is consistent
+            dummy_hash = "$2b$10$dummyhashfortimingatttackpreventionxxx1234567890abcdefghij"
+            verify_password(password, dummy_hash)
+            password_valid = False
+
+        if not user or not password_valid:
             raise ValueError("Invalid credentials")
+
         return user

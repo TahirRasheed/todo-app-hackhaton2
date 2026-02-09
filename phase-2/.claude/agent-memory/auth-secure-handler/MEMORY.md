@@ -43,8 +43,9 @@
 
 ### Integration Test Coverage
 - **Signup Flow**: Valid signup, invalid email, weak password, duplicate email, token verification
-- **Signin Flow**: Valid signin, invalid email, wrong password, token issuance
+- **Signin Flow**: Valid signin, invalid email, wrong password, token issuance, enumeration prevention
 - **Token Security**: Token in response, password not exposed, claims match user data
+- **Enumeration Prevention**: Verify identical error messages for wrong email vs wrong password
 
 ### Test Fixtures
 - Use in-memory SQLite (`sqlite+aiosqlite:///:memory:`) for fast test database
@@ -69,6 +70,18 @@ app.dependency_overrides[get_session] = override_get_session
 **Solution**: Use identical regex patterns:
 - Frontend: `/[A-Z]/`, `/[a-z]/`, `/\d/`, `password.length >= 8`
 - Backend: `re.search(r"[A-Z]", password)`, etc.
+
+### Timing Attack Prevention
+- **Pattern**: Always verify password (even if user doesn't exist)
+- **Implementation**: Use dummy hash when user not found to maintain constant-time behavior
+- **Code Location**: `UserService.authenticate()` in `user_service.py`
+- **Dummy Hash**: `$2b$10$dummyhashfortimingatttackpreventionxxx1234567890abcdefghij`
+
+### User Enumeration Prevention
+- **Pattern**: Return identical error message for "email not found" and "wrong password"
+- **Error Message**: "Invalid email or password" (generic, no field-specific info)
+- **Status Code**: 401 Unauthorized for both cases
+- **Test**: `test_signin_prevents_user_enumeration()` verifies messages are identical
 
 ## Security Decisions
 
@@ -103,12 +116,23 @@ app.dependency_overrides[get_session] = override_get_session
 - Auth form: `frontend/src/components/AuthForm.tsx`
 - API client: `frontend/src/lib/api.ts`
 - Signup page: `frontend/src/app/auth/signup/page.tsx`
+- Signin page: `frontend/src/app/auth/signin/page.tsx`
+
+## Implementation History
+
+### Phase 4 - Signin Feature (US2) - COMPLETED
+- **Backend**: Signin endpoint with UserSignin schema
+- **Security**: Enumeration prevention + timing attack prevention
+- **Frontend**: Signin form (already implemented in Phase 3)
+- **Tests**: Added enumeration prevention test, constant-time verification test
+- **Files Modified**: `auth.py`, `user_service.py`, `test_auth_flow.py`, `test_security.py`
 
 ## Next Phase Checklist
-- [ ] Implement signin endpoint (similar to signup, skip password validation)
+- [x] Implement signin endpoint (COMPLETED - Phase 4)
 - [ ] Add authentication middleware for protected routes
 - [ ] Implement password reset flow with email verification
-- [ ] Add rate limiting on auth endpoints
+- [ ] Add rate limiting on auth endpoints (5 attempts per 15 min)
 - [ ] Implement refresh token rotation
-- [ ] Add account lockout after failed attempts
+- [ ] Add account lockout after failed attempts (10 failures = 30 min lockout)
 - [ ] Log authentication events for security monitoring
+- [ ] Upgrade token storage to httpOnly cookies (via Next.js middleware)

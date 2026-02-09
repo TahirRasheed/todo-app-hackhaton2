@@ -259,6 +259,86 @@ class TestSigninFlow:
         assert response.status_code == 401
         assert "invalid" in response.text.lower()
 
+    async def test_signin_prevents_user_enumeration(self, async_client: AsyncClient, session: AsyncSession):
+        """
+        Test signin returns identical error for non-existent email and wrong password.
+
+        Security: User enumeration prevention
+        - Attacker should not be able to determine if email exists in database
+        - Both "email not found" and "wrong password" return same status and message
+        """
+        # Create user with known password
+        await UserService.create_user(
+            session=session,
+            email="enumtest@example.com",
+            password="CorrectPass123",
+            name="Enum Test User"
+        )
+        await session.commit()
+
+        # Test 1: Non-existent email
+        response_no_email = await async_client.post(
+            "/api/v1/auth/signin",
+            json={
+                "email": "nonexistent@example.com",
+                "password": "SomePassword123"
+            }
+        )
+
+        # Test 2: Existing email, wrong password
+        response_wrong_pass = await async_client.post(
+            "/api/v1/auth/signin",
+            json={
+                "email": "enumtest@example.com",
+                "password": "WrongPassword123"
+            }
+        )
+
+        # Both should return 401
+        assert response_no_email.status_code == 401
+        assert response_wrong_pass.status_code == 401
+
+        # Both should return IDENTICAL error message (prevents enumeration)
+        error_no_email = response_no_email.json().get("detail", "")
+        error_wrong_pass = response_wrong_pass.json().get("detail", "")
+
+        assert error_no_email == error_wrong_pass, (
+            f"Error messages differ (enumeration vulnerability): "
+            f"no_email='{error_no_email}' vs wrong_pass='{error_wrong_pass}'"
+        )
+        assert "invalid" in error_no_email.lower()
+
+    async def test_signin_token_claims_match_user_data(self, async_client: AsyncClient, session: AsyncSession):
+        """Test signin JWT token contains correct user_id (sub) and email claims"""
+        # Create user
+        await UserService.create_user(
+            session=session,
+            email="tokenclaims@example.com",
+            password="SecurePass123",
+            name="Token Claims User"
+        )
+        await session.commit()
+
+        # Sign in
+        response = await async_client.post(
+            "/api/v1/auth/signin",
+            json={
+                "email": "tokenclaims@example.com",
+                "password": "SecurePass123"
+            }
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        token = data["token"]
+
+        # Decode and verify token claims
+        payload = verify_token(token)
+        assert payload["sub"] == data["id"]  # user_id in sub claim
+        assert payload["email"] == "tokenclaims@example.com"
+        assert payload["iss"] == "todo-app"
+        assert payload["aud"] == "todo-app-users"
+
 
 @pytest.mark.asyncio
 class TestTokenSecurity:

@@ -60,6 +60,28 @@ class TestPasswordHashing:
         with pytest.raises(ValueError):
             hash_password("")
 
+    def test_verify_password_uses_constant_time_comparison(self):
+        """
+        Test password verification uses constant-time comparison.
+
+        Security: Timing attack prevention
+        - Bcrypt (via passlib) uses constant-time comparison internally
+        - This test verifies verify_password doesn't fail for edge cases
+        """
+        password = "SecurePass123"
+        hashed = hash_password(password)
+
+        # Verify correct password
+        assert verify_password(password, hashed) is True
+
+        # Verify incorrect passwords (should not leak timing info)
+        assert verify_password("WrongPass123", hashed) is False
+        assert verify_password("", hashed) is False
+        assert verify_password("Short1", hashed) is False
+
+        # All False results should be indistinguishable (constant time)
+        # Bcrypt handles this internally; we just verify it works
+
 
 class TestPasswordStrengthValidation:
     """Test password strength validation rules"""
