@@ -855,3 +855,377 @@ class TestProtectedEndpointsValidation:
             assert response.status_code == expected_status, (
                 f"{method} {url} expected {expected_status}, got {response.status_code}"
             )
+
+
+@pytest.mark.asyncio
+class TestOwnershipEnforcement:
+    """Integration tests for ownership enforcement and data isolation"""
+
+    async def test_user_can_only_see_own_tasks(
+        self, async_client: AsyncClient
+    ):
+        """Test users see only their own tasks in list endpoint"""
+        # Create User A with 3 tasks
+        user_a_response = await async_client.post(
+            "/api/v1/auth/signup",
+            json={
+                "email": "usera_own@example.com",
+                "password": "SecurePass123",
+                "name": "User A"
+            }
+        )
+        user_a_id = user_a_response.json()["id"]
+        user_a_token = user_a_response.json()["token"]
+
+        for i in range(3):
+            await async_client.post(
+                f"/api/v1/users/{user_a_id}/tasks",
+                headers={"Authorization": f"Bearer {user_a_token}"},
+                json={"title": f"User A Task {i+1}"}
+            )
+
+        # Create User B with 2 tasks
+        user_b_response = await async_client.post(
+            "/api/v1/auth/signup",
+            json={
+                "email": "userb_own@example.com",
+                "password": "SecurePass123",
+                "name": "User B"
+            }
+        )
+        user_b_id = user_b_response.json()["id"]
+        user_b_token = user_b_response.json()["token"]
+
+        for i in range(2):
+            await async_client.post(
+                f"/api/v1/users/{user_b_id}/tasks",
+                headers={"Authorization": f"Bearer {user_b_token}"},
+                json={"title": f"User B Task {i+1}"}
+            )
+
+        # User A lists tasks - should see only 3
+        user_a_list = await async_client.get(
+            f"/api/v1/users/{user_a_id}/tasks",
+            headers={"Authorization": f"Bearer {user_a_token}"}
+        )
+        assert user_a_list.status_code == 200
+        assert len(user_a_list.json()["data"]) == 3
+        assert user_a_list.json()["meta"]["total"] == 3
+
+        # User B lists tasks - should see only 2
+        user_b_list = await async_client.get(
+            f"/api/v1/users/{user_b_id}/tasks",
+            headers={"Authorization": f"Bearer {user_b_token}"}
+        )
+        assert user_b_list.status_code == 200
+        assert len(user_b_list.json()["data"]) == 2
+        assert user_b_list.json()["meta"]["total"] == 2
+
+    async def test_user_cannot_view_other_users_task(
+        self, async_client: AsyncClient
+    ):
+        """Test User A cannot GET User B's specific task (403)"""
+        # Create User A
+        user_a_response = await async_client.post(
+            "/api/v1/auth/signup",
+            json={
+                "email": "usera_view@example.com",
+                "password": "SecurePass123",
+                "name": "User A"
+            }
+        )
+        user_a_token = user_a_response.json()["token"]
+
+        # Create User B and a task
+        user_b_response = await async_client.post(
+            "/api/v1/auth/signup",
+            json={
+                "email": "userb_view@example.com",
+                "password": "SecurePass123",
+                "name": "User B"
+            }
+        )
+        user_b_id = user_b_response.json()["id"]
+        user_b_token = user_b_response.json()["token"]
+
+        task_response = await async_client.post(
+            f"/api/v1/users/{user_b_id}/tasks",
+            headers={"Authorization": f"Bearer {user_b_token}"},
+            json={"title": "User B's Private Task"}
+        )
+        task_id = task_response.json()["data"]["id"]
+
+        # User A tries to GET User B's task with User A's token
+        response = await async_client.get(
+            f"/api/v1/users/{user_b_id}/tasks/{task_id}",
+            headers={"Authorization": f"Bearer {user_a_token}"}
+        )
+
+        # Should return 403 (ownership check at URL level)
+        assert response.status_code == 403
+        assert "FORBIDDEN" in response.json()["error"]["code"]
+
+    async def test_user_cannot_update_other_users_task(
+        self, async_client: AsyncClient
+    ):
+        """Test User A cannot UPDATE User B's task (403)"""
+        # Create User A
+        user_a_response = await async_client.post(
+            "/api/v1/auth/signup",
+            json={
+                "email": "usera_update@example.com",
+                "password": "SecurePass123",
+                "name": "User A"
+            }
+        )
+        user_a_token = user_a_response.json()["token"]
+
+        # Create User B and a task
+        user_b_response = await async_client.post(
+            "/api/v1/auth/signup",
+            json={
+                "email": "userb_update@example.com",
+                "password": "SecurePass123",
+                "name": "User B"
+            }
+        )
+        user_b_id = user_b_response.json()["id"]
+        user_b_token = user_b_response.json()["token"]
+
+        task_response = await async_client.post(
+            f"/api/v1/users/{user_b_id}/tasks",
+            headers={"Authorization": f"Bearer {user_b_token}"},
+            json={"title": "User B's Task"}
+        )
+        task_id = task_response.json()["data"]["id"]
+
+        # User A tries to UPDATE User B's task
+        response = await async_client.put(
+            f"/api/v1/users/{user_b_id}/tasks/{task_id}",
+            headers={"Authorization": f"Bearer {user_a_token}"},
+            json={"title": "Hacked Title", "completed": True}
+        )
+
+        # Should return 403
+        assert response.status_code == 403
+        assert "FORBIDDEN" in response.json()["error"]["code"]
+
+        # Verify User B's task unchanged
+        verify_response = await async_client.get(
+            f"/api/v1/users/{user_b_id}/tasks/{task_id}",
+            headers={"Authorization": f"Bearer {user_b_token}"}
+        )
+        assert verify_response.status_code == 200
+        assert verify_response.json()["data"]["title"] == "User B's Task"
+        assert verify_response.json()["data"]["completed"] is False
+
+    async def test_user_cannot_delete_other_users_task(
+        self, async_client: AsyncClient
+    ):
+        """Test User A cannot DELETE User B's task (403)"""
+        # Create User A
+        user_a_response = await async_client.post(
+            "/api/v1/auth/signup",
+            json={
+                "email": "usera_delete@example.com",
+                "password": "SecurePass123",
+                "name": "User A"
+            }
+        )
+        user_a_token = user_a_response.json()["token"]
+
+        # Create User B and a task
+        user_b_response = await async_client.post(
+            "/api/v1/auth/signup",
+            json={
+                "email": "userb_delete@example.com",
+                "password": "SecurePass123",
+                "name": "User B"
+            }
+        )
+        user_b_id = user_b_response.json()["id"]
+        user_b_token = user_b_response.json()["token"]
+
+        task_response = await async_client.post(
+            f"/api/v1/users/{user_b_id}/tasks",
+            headers={"Authorization": f"Bearer {user_b_token}"},
+            json={"title": "User B's Permanent Task"}
+        )
+        task_id = task_response.json()["data"]["id"]
+
+        # User A tries to DELETE User B's task
+        response = await async_client.delete(
+            f"/api/v1/users/{user_b_id}/tasks/{task_id}",
+            headers={"Authorization": f"Bearer {user_a_token}"}
+        )
+
+        # Should return 403
+        assert response.status_code == 403
+
+        # Verify User B's task still exists
+        verify_response = await async_client.get(
+            f"/api/v1/users/{user_b_id}/tasks/{task_id}",
+            headers={"Authorization": f"Bearer {user_b_token}"}
+        )
+        assert verify_response.status_code == 200
+
+    async def test_pagination_limits_to_user_tasks(
+        self, async_client: AsyncClient
+    ):
+        """Test pagination returns only user's tasks, not all tasks"""
+        # Create User A with 5 tasks
+        user_a_response = await async_client.post(
+            "/api/v1/auth/signup",
+            json={
+                "email": "usera_page@example.com",
+                "password": "SecurePass123",
+                "name": "User A"
+            }
+        )
+        user_a_id = user_a_response.json()["id"]
+        user_a_token = user_a_response.json()["token"]
+
+        for i in range(5):
+            await async_client.post(
+                f"/api/v1/users/{user_a_id}/tasks",
+                headers={"Authorization": f"Bearer {user_a_token}"},
+                json={"title": f"User A Task {i+1}"}
+            )
+
+        # Create User B with 3 tasks
+        user_b_response = await async_client.post(
+            "/api/v1/auth/signup",
+            json={
+                "email": "userb_page@example.com",
+                "password": "SecurePass123",
+                "name": "User B"
+            }
+        )
+        user_b_id = user_b_response.json()["id"]
+        user_b_token = user_b_response.json()["token"]
+
+        for i in range(3):
+            await async_client.post(
+                f"/api/v1/users/{user_b_id}/tasks",
+                headers={"Authorization": f"Bearer {user_b_token}"},
+                json={"title": f"User B Task {i+1}"}
+            )
+
+        # User A lists with pagination (limit 2)
+        page1_response = await async_client.get(
+            f"/api/v1/users/{user_a_id}/tasks?limit=2&skip=0",
+            headers={"Authorization": f"Bearer {user_a_token}"}
+        )
+        assert page1_response.status_code == 200
+        page1_data = page1_response.json()
+        assert len(page1_data["data"]) == 2
+        assert page1_data["meta"]["total"] == 5  # Total for User A only
+
+        # User B lists all tasks
+        user_b_response = await async_client.get(
+            f"/api/v1/users/{user_b_id}/tasks",
+            headers={"Authorization": f"Bearer {user_b_token}"}
+        )
+        assert user_b_response.status_code == 200
+        user_b_data = user_b_response.json()
+        assert len(user_b_data["data"]) == 3
+        assert user_b_data["meta"]["total"] == 3  # Total for User B only
+
+    async def test_generic_403_error_prevents_info_leak(
+        self, async_client: AsyncClient
+    ):
+        """Test that 403 errors are generic and don't leak task existence"""
+        # Create User A
+        user_a_response = await async_client.post(
+            "/api/v1/auth/signup",
+            json={
+                "email": "usera_leak@example.com",
+                "password": "SecurePass123",
+                "name": "User A"
+            }
+        )
+        user_a_token = user_a_response.json()["token"]
+
+        # Create User B and a task
+        user_b_response = await async_client.post(
+            "/api/v1/auth/signup",
+            json={
+                "email": "userb_leak@example.com",
+                "password": "SecurePass123",
+                "name": "User B"
+            }
+        )
+        user_b_id = user_b_response.json()["id"]
+        user_b_token = user_b_response.json()["token"]
+
+        task_response = await async_client.post(
+            f"/api/v1/users/{user_b_id}/tasks",
+            headers={"Authorization": f"Bearer {user_b_token}"},
+            json={"title": "Secret Task"}
+        )
+        task_id = task_response.json()["data"]["id"]
+
+        # User A tries to GET User B's task (task exists, not owned)
+        response_exists = await async_client.get(
+            f"/api/v1/users/{user_b_id}/tasks/{task_id}",
+            headers={"Authorization": f"Bearer {user_a_token}"}
+        )
+
+        # User A tries to GET non-existent task (task doesn't exist)
+        from uuid import uuid4
+        fake_task_id = str(uuid4())
+        response_not_exists = await async_client.get(
+            f"/api/v1/users/{user_b_id}/tasks/{fake_task_id}",
+            headers={"Authorization": f"Bearer {user_a_token}"}
+        )
+
+        # Both should return 403 (not 404 for non-existent)
+        assert response_exists.status_code == 403
+        assert response_not_exists.status_code == 403
+
+        # Error messages should be identical (generic)
+        error_exists = response_exists.json()["error"]["message"]
+        error_not_exists = response_not_exists.json()["error"]["message"]
+        assert error_exists == error_not_exists
+        assert "Not authorized to access this resource" in error_exists
+
+    async def test_task_user_id_cannot_be_changed(
+        self, async_client: AsyncClient
+    ):
+        """Test that user_id is immutable after task creation"""
+        # Create User A and task
+        user_a_response = await async_client.post(
+            "/api/v1/auth/signup",
+            json={
+                "email": "usera_immutable@example.com",
+                "password": "SecurePass123",
+                "name": "User A"
+            }
+        )
+        user_a_id = user_a_response.json()["id"]
+        user_a_token = user_a_response.json()["token"]
+
+        task_response = await async_client.post(
+            f"/api/v1/users/{user_a_id}/tasks",
+            headers={"Authorization": f"Bearer {user_a_token}"},
+            json={"title": "User A's Task"}
+        )
+        task_id = task_response.json()["data"]["id"]
+        assert task_response.json()["data"]["user_id"] == user_a_id
+
+        # Update task (user_id not in update schema, should remain unchanged)
+        update_response = await async_client.put(
+            f"/api/v1/users/{user_a_id}/tasks/{task_id}",
+            headers={"Authorization": f"Bearer {user_a_token}"},
+            json={"title": "Updated Task"}
+        )
+        assert update_response.status_code == 200
+        assert update_response.json()["data"]["user_id"] == user_a_id
+
+        # Verify user_id unchanged via GET
+        get_response = await async_client.get(
+            f"/api/v1/users/{user_a_id}/tasks/{task_id}",
+            headers={"Authorization": f"Bearer {user_a_token}"}
+        )
+        assert get_response.status_code == 200
+        assert get_response.json()["data"]["user_id"] == user_a_id

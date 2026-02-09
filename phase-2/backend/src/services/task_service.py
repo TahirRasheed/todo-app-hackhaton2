@@ -117,10 +117,12 @@ class TaskService:
         Returns:
             Count of tasks owned by user
         """
+        from sqlalchemy import func
+
         result = await session.execute(
-            select(Task).where(Task.user_id == user_id)
+            select(func.count(Task.id)).where(Task.user_id == user_id)
         )
-        return len(result.scalars().all())
+        return result.scalar_one()
 
     @staticmethod
     async def update_task(

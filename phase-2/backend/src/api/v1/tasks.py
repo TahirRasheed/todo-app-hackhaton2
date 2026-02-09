@@ -41,7 +41,7 @@ async def create_task(
     if current_user.id != user_id:
         raise HTTPException(
             status_code=403,
-            detail=APIResponse.error("FORBIDDEN", "Access denied").dict(),
+            detail=APIResponse.error("FORBIDDEN", "Not authorized to access this resource").dict(),
         )
 
     # Create task
@@ -87,7 +87,7 @@ async def list_tasks(
     if current_user.id != user_id:
         raise HTTPException(
             status_code=403,
-            detail=APIResponse.error("FORBIDDEN", "Access denied").dict(),
+            detail=APIResponse.error("FORBIDDEN", "Not authorized to access this resource").dict(),
         )
 
     # Retrieve tasks
@@ -127,23 +127,27 @@ async def get_task(
         APIResponse with TaskResponse data
 
     Raises:
-        HTTPException 403: If current_user.id != user_id
-        HTTPException 404: If task not found
+        HTTPException 403: If current_user.id != user_id or task not owned
+
+    Security Note:
+        Returns 403 for both "task not found" and "not owned by user" to prevent
+        information leakage about task existence.
     """
     # Verify user_id matches current user
     if current_user.id != user_id:
         raise HTTPException(
             status_code=403,
-            detail=APIResponse.error("FORBIDDEN", "Access denied").dict(),
+            detail=APIResponse.error("FORBIDDEN", "Not authorized to access this resource").dict(),
         )
 
-    # Retrieve task
+    # Retrieve task with ownership verification
     try:
         task = await TaskService.get_task(session, task_id, user_id)
     except ValueError:
+        # Return 403 instead of 404 to prevent leaking task existence
         raise HTTPException(
-            status_code=404,
-            detail=APIResponse.error("NOT_FOUND", "Task not found").dict(),
+            status_code=403,
+            detail=APIResponse.error("FORBIDDEN", "Not authorized to access this resource").dict(),
         )
 
     task_response = TaskResponse.from_attributes(task)
@@ -172,18 +176,21 @@ async def update_task(
         APIResponse with updated TaskResponse
 
     Raises:
-        HTTPException 403: If current_user.id != user_id
+        HTTPException 403: If current_user.id != user_id or task not owned
         HTTPException 400: If validation fails
-        HTTPException 404: If task not found
+
+    Security Note:
+        Returns 403 for both "task not found" and "not owned by user" to prevent
+        information leakage about task existence.
     """
     # Verify user_id matches current user
     if current_user.id != user_id:
         raise HTTPException(
             status_code=403,
-            detail=APIResponse.error("FORBIDDEN", "Access denied").dict(),
+            detail=APIResponse.error("FORBIDDEN", "Not authorized to access this resource").dict(),
         )
 
-    # Update task
+    # Update task with ownership verification
     try:
         task = await TaskService.update_task(
             session,
@@ -196,9 +203,10 @@ async def update_task(
     except ValueError as e:
         error_code = "NOT_FOUND" if "not found" in str(e).lower() else "INVALID_TASK"
         if error_code == "NOT_FOUND":
+            # Return 403 instead of 404 to prevent leaking task existence
             raise HTTPException(
-                status_code=404,
-                detail=APIResponse.error(error_code, str(e)).dict(),
+                status_code=403,
+                detail=APIResponse.error("FORBIDDEN", "Not authorized to access this resource").dict(),
             )
         else:
             raise HTTPException(
@@ -230,23 +238,27 @@ async def delete_task_endpoint(
         204 No Content (empty response)
 
     Raises:
-        HTTPException 403: If current_user.id != user_id
-        HTTPException 404: If task not found
+        HTTPException 403: If current_user.id != user_id or task not owned
+
+    Security Note:
+        Returns 403 for both "task not found" and "not owned by user" to prevent
+        information leakage about task existence.
     """
     # Verify user_id matches current user
     if current_user.id != user_id:
         raise HTTPException(
             status_code=403,
-            detail=APIResponse.error("FORBIDDEN", "Access denied").dict(),
+            detail=APIResponse.error("FORBIDDEN", "Not authorized to access this resource").dict(),
         )
 
-    # Delete task
+    # Delete task with ownership verification
     try:
         await TaskService.delete_task(session, task_id, user_id)
     except ValueError:
+        # Return 403 instead of 404 to prevent leaking task existence
         raise HTTPException(
-            status_code=404,
-            detail=APIResponse.error("NOT_FOUND", "Task not found").dict(),
+            status_code=403,
+            detail=APIResponse.error("FORBIDDEN", "Not authorized to access this resource").dict(),
         )
 
     return None

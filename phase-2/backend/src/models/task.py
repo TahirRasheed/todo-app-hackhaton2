@@ -3,13 +3,17 @@ from datetime import datetime
 from typing import Optional
 from uuid import UUID, uuid4
 
-from sqlmodel import SQLModel, Field, Relationship
+from sqlmodel import SQLModel, Field, Relationship, Index
 
 
 class Task(SQLModel, table=True):
     """User task model"""
 
     __tablename__ = "tasks"
+    __table_args__ = (
+        # Composite index for efficient user task queries (list with pagination)
+        Index("ix_tasks_user_id_created_at", "user_id", "created_at"),
+    )
 
     id: Optional[UUID] = Field(
         default_factory=uuid4,
@@ -18,7 +22,6 @@ class Task(SQLModel, table=True):
     )
     user_id: UUID = Field(
         foreign_key="users.id",
-        index=True,
         description="Owner of this task"
     )
     title: str = Field(
@@ -36,7 +39,6 @@ class Task(SQLModel, table=True):
     )
     created_at: datetime = Field(
         default_factory=datetime.utcnow,
-        index=True,
         description="Task creation timestamp"
     )
     updated_at: datetime = Field(
