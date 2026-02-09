@@ -1,170 +1,163 @@
 """Authentication endpoints (signup, signin, signout)"""
-import re
-from datetime import timedelta
-
-from fastapi import APIRouter, HTTPException, Depends, Response
+from fastapi import APIRouter, HTTPException, Depends, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.src.config import settings
-from backend.src.db.session import get_session
-from backend.src.schemas.user import UserCreate, UserResponse
-from backend.src.security.jwt import create_access_token, create_refresh_token
-from backend.src.services.user_service import UserService
-from backend.src.utils.response import APIResponse
+from src.db.session import get_session
+from src.schemas.user import UserSignup, UserTokenResponse
+from src.security.jwt import create_access_token
+from src.security.password import hash_password, validate_password_strength
+from src.services.user_service import UserService
 
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 
-def validate_email(email: str) -> bool:
-    """Simple email validation"""
-    pattern = r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$"
-    return re.match(pattern, email) is not None
-
-
-@router.post("/signup", status_code=201, response_model=APIResponse)
+@router.post("/signup", status_code=status.HTTP_201_CREATED, response_model=UserTokenResponse)
 async def signup(
-    user_data: UserCreate, response: Response, session: AsyncSession = Depends(get_session)
+    user_data: UserSignup,
+    session: AsyncSession = Depends(get_session)
 ):
     """
-    Register a new user
+    Register a new user with JWT authentication.
+
+    Security:
+    - Password hashed with bcrypt (cost 10)
+    - JWT token issued with 900 second expiration
+    - Token contains user_id (sub) and email claims
 
     Args:
-        user_data: Email, password, and name
-        response: FastAPI response object for setting cookies
+        user_data: UserSignup schema (email, password, name)
         session: Database session
 
     Returns:
-        APIResponse with UserResponse data and JWT token in Set-Cookie
+        UserTokenResponse with user data + JWT token + expiresIn
 
     Raises:
-        HTTPException 400: If email invalid, password weak, or email already exists
+        HTTPException 400: Invalid email format or weak password
+        HTTPException 409: Email already exists
+        HTTPException 500: Server error
     """
-    # Validate email format
-    if not validate_email(user_data.email):
+    # Validate password strength
+    is_valid, message = validate_password_strength(user_data.password)
+    if not is_valid:
         raise HTTPException(
-            status_code=400,
-            detail=APIResponse.error("INVALID_EMAIL", "Email format is invalid").dict(),
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=message
         )
 
-    # Validate password (min 8 chars)
-    if len(user_data.password) < 8:
-        raise HTTPException(
-            status_code=400,
-            detail=APIResponse.error(
-                "WEAK_PASSWORD", "Password must be at least 8 characters"
-            ).dict(),
-        )
-
-    # Create user
+    # Create user (will raise ValueError if email exists)
     try:
         user = await UserService.create_user(
-            session, user_data.email, user_data.password, user_data.name
+            session=session,
+            email=user_data.email,
+            password=user_data.password,
+            name=user_data.name or ""
         )
     except ValueError as e:
+        # Email already exists - return 409 Conflict
+        error_message = str(e)
+        if "already registered" in error_message.lower():
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Email already registered"
+            )
+        # Other validation errors - return 400
         raise HTTPException(
-            status_code=400,
-            detail=APIResponse.error("EMAIL_EXISTS", str(e)).dict(),
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=error_message
+        )
+    except Exception as e:
+        # Unexpected server error
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to create user account"
         )
 
-    # Create JWT tokens
-    access_token = create_access_token(
-        {"sub": str(user.id)}, expires_delta=timedelta(minutes=15)
-    )
-    refresh_token = create_refresh_token({"sub": str(user.id)})
+    # Generate JWT token (900 seconds = 15 minutes)
+    try:
+        token, expires_in = create_access_token(
+            user_id=str(user.id),
+            email=user.email
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to generate authentication token"
+        )
 
-    # Set JWT in httpOnly, Secure cookie
-    response.set_cookie(
-        key="jwt",
-        value=access_token,
-        httponly=True,
-        secure=True,
-        samesite="strict",
-        max_age=900,  # 15 minutes
-    )
-    response.set_cookie(
-        key="refresh_token",
-        value=refresh_token,
-        httponly=True,
-        secure=True,
-        samesite="strict",
-        max_age=604800,  # 7 days
+    # Return user data + token
+    return UserTokenResponse(
+        id=str(user.id),
+        email=user.email,
+        name=user.name,
+        token=token,
+        expiresIn=expires_in
     )
 
-    user_response = UserResponse.from_attributes(user)
-    return APIResponse.success(user_response.dict())
 
-
-@router.post("/signin", response_model=APIResponse)
+@router.post("/signin", status_code=status.HTTP_200_OK, response_model=UserTokenResponse)
 async def signin(
-    email: str, password: str, response: Response, session: AsyncSession = Depends(get_session)
+    user_data: UserSignup,
+    session: AsyncSession = Depends(get_session)
 ):
     """
-    Authenticate and sign in user
+    Authenticate user and issue JWT token.
 
     Args:
-        email: User email
-        password: User password
-        response: FastAPI response object for setting cookies
+        user_data: Email and password
         session: Database session
 
     Returns:
-        APIResponse with UserResponse data and JWT token in Set-Cookie
+        UserTokenResponse with user data + JWT token
 
     Raises:
-        HTTPException 401: If credentials are invalid
+        HTTPException 401: Invalid credentials
+        HTTPException 500: Server error
     """
     try:
-        user = await UserService.authenticate(session, email, password)
+        user = await UserService.authenticate(
+            session=session,
+            email=user_data.email,
+            password=user_data.password
+        )
     except ValueError:
         raise HTTPException(
-            status_code=401,
-            detail=APIResponse.error("INVALID_CREDENTIALS", "Invalid credentials").dict(),
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid email or password"
+        )
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Authentication failed"
         )
 
-    # Create JWT tokens
-    access_token = create_access_token(
-        {"sub": str(user.id)}, expires_delta=timedelta(minutes=15)
-    )
-    refresh_token = create_refresh_token({"sub": str(user.id)})
+    # Generate JWT token
+    try:
+        token, expires_in = create_access_token(
+            user_id=str(user.id),
+            email=user.email
+        )
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to generate authentication token"
+        )
 
-    # Set JWT in httpOnly, Secure cookie
-    response.set_cookie(
-        key="jwt",
-        value=access_token,
-        httponly=True,
-        secure=True,
-        samesite="strict",
-        max_age=900,  # 15 minutes
-    )
-    response.set_cookie(
-        key="refresh_token",
-        value=refresh_token,
-        httponly=True,
-        secure=True,
-        samesite="strict",
-        max_age=604800,  # 7 days
+    return UserTokenResponse(
+        id=str(user.id),
+        email=user.email,
+        name=user.name,
+        token=token,
+        expiresIn=expires_in
     )
 
-    user_response = UserResponse.from_attributes(user)
-    return APIResponse.success(user_response.dict())
 
-
-@router.post("/signout", response_model=APIResponse)
-async def signout(response: Response):
+@router.post("/signout", status_code=status.HTTP_200_OK)
+async def signout():
     """
-    Sign out user by clearing JWT cookie
-
-    Args:
-        response: FastAPI response object for clearing cookies
+    Sign out user (client handles token removal).
 
     Returns:
-        APIResponse with empty data
+        Success message
     """
-    # Clear JWT cookies
-    response.delete_cookie(key="jwt", httponly=True, secure=True, samesite="strict")
-    response.delete_cookie(
-        key="refresh_token", httponly=True, secure=True, samesite="strict"
-    )
-
-    return APIResponse.success(None)
+    return {"message": "Signed out successfully"}

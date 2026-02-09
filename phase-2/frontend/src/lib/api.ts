@@ -63,28 +63,44 @@ export function getErrorMessage(error: unknown): string {
 }
 
 /**
+ * User token response from auth endpoints
+ */
+export interface UserTokenResponse {
+  id: string
+  email: string
+  name?: string
+  token: string
+  expiresIn: number
+}
+
+/**
  * Helper function for signup API call
  */
 export async function signupUser(
   email: string,
   password: string,
-  name: string
-) {
-  return api.post('/auth/signup', {
+  name?: string
+): Promise<UserTokenResponse> {
+  const response = await api.post<UserTokenResponse>('/api/v1/auth/signup', {
     email,
     password,
     name,
   });
+  return response.data;
 }
 
 /**
  * Helper function for signin API call
  */
-export async function signinUser(email: string, password: string) {
-  return api.post('/auth/signin', {
+export async function signinUser(
+  email: string,
+  password: string
+): Promise<UserTokenResponse> {
+  const response = await api.post<UserTokenResponse>('/api/v1/auth/signin', {
     email,
     password,
   });
+  return response.data;
 }
 
 /**

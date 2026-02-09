@@ -15,6 +15,33 @@ interface AuthFormProps {
   mode: AuthFormMode
 }
 
+interface PasswordStrength {
+  isValid: boolean
+  errors: string[]
+}
+
+function validatePasswordStrength(password: string): PasswordStrength {
+  const errors: string[] = []
+
+  if (password.length < 8) {
+    errors.push('At least 8 characters')
+  }
+  if (!/[A-Z]/.test(password)) {
+    errors.push('One uppercase letter')
+  }
+  if (!/[a-z]/.test(password)) {
+    errors.push('One lowercase letter')
+  }
+  if (!/\d/.test(password)) {
+    errors.push('One digit')
+  }
+
+  return {
+    isValid: errors.length === 0,
+    errors
+  }
+}
+
 export default function AuthForm({ mode }: AuthFormProps) {
   const router = useRouter()
   const [email, setEmail] = useState('')
@@ -25,7 +52,8 @@ export default function AuthForm({ mode }: AuthFormProps) {
   const [showPassword, setShowPassword] = useState(false)
 
   const isSignup = mode === 'signup'
-  const isPasswordWeak = password.length > 0 && password.length < 8
+  const passwordStrength = isSignup ? validatePasswordStrength(password) : { isValid: true, errors: [] }
+  const isPasswordWeak = password.length > 0 && !passwordStrength.isValid
 
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault()
@@ -33,26 +61,34 @@ export default function AuthForm({ mode }: AuthFormProps) {
     setError(null)
 
     try {
-      const endpoint = isSignup ? '/auth/signup' : '/auth/signin'
-      const body = isSignup
-        ? { email, password, name }
-        : { email, password }
+      const { signupUser, signinUser } = await import('@/lib/api')
 
-      const response = await apiClient<{ data: User }>(
-        endpoint,
-        {
-          method: 'POST',
-          body: JSON.stringify(body),
-          includeAuth: false,
-        }
-      )
+      if (isSignup) {
+        const userData = await signupUser(email, password, name)
 
-      if (response.data) {
-        // Redirect to dashboard on success
-        router.push('/dashboard')
+        // Store token in localStorage (in production, consider httpOnly cookie via Next.js middleware)
+        localStorage.setItem('token', userData.token)
+        localStorage.setItem('user', JSON.stringify({
+          id: userData.id,
+          email: userData.email,
+          name: userData.name
+        }))
+      } else {
+        const userData = await signinUser(email, password)
+
+        // Store token in localStorage
+        localStorage.setItem('token', userData.token)
+        localStorage.setItem('user', JSON.stringify({
+          id: userData.id,
+          email: userData.email,
+          name: userData.name
+        }))
       }
-    } catch (err) {
-      const message = err instanceof Error ? err.message : `${isSignup ? 'Signup' : 'Signin'} failed`
+
+      // Redirect to dashboard on success
+      router.push('/dashboard')
+    } catch (err: any) {
+      const message = err.response?.data?.detail || err.message || `${isSignup ? 'Signup' : 'Signin'} failed`
       setError(message)
     } finally {
       setLoading(false)
@@ -111,11 +147,36 @@ export default function AuthForm({ mode }: AuthFormProps) {
           </button>
         </div>
         {isSignup && password.length > 0 && (
-          <p className={`text-xs mt-1 ${isPasswordWeak ? 'text-red-600' : 'text-green-600'}`}>
-            {isPasswordWeak
-              ? '✗ Password must be at least 8 characters'
-              : '✓ Password is strong'}
-          </p>
+          <div className="mt-2 space-y-1">
+            {passwordStrength.isValid ? (
+              <p className="text-xs text-green-600 font-medium">
+                ✓ Password meets all requirements
+              </p>
+            ) : (
+              <>
+                <p className="text-xs text-gray-700 font-medium">Password requirements:</p>
+                <ul className="text-xs space-y-0.5 pl-4">
+                  {passwordStrength.errors.map((error, index) => (
+                    <li key={index} className="text-red-600">
+                      ✗ {error}
+                    </li>
+                  ))}
+                  {password.length >= 8 && (
+                    <li className="text-green-600">✓ At least 8 characters</li>
+                  )}
+                  {/[A-Z]/.test(password) && (
+                    <li className="text-green-600">✓ One uppercase letter</li>
+                  )}
+                  {/[a-z]/.test(password) && (
+                    <li className="text-green-600">✓ One lowercase letter</li>
+                  )}
+                  {/\d/.test(password) && (
+                    <li className="text-green-600">✓ One digit</li>
+                  )}
+                </ul>
+              </>
+            )}
+          </div>
         )}
       </div>
 

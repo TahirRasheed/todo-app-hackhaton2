@@ -1,204 +1,321 @@
-"""Authentication flow integration tests"""
+"""Integration tests for authentication flow (signup, signin, token validation)"""
 import pytest
 from httpx import AsyncClient
-
-from backend.src.main import app
-from backend.src.models.user import User
 from sqlalchemy.ext.asyncio import AsyncSession
+
+from src.models.user import User
+from src.security.jwt import verify_token
+from src.services.user_service import UserService
 
 
 @pytest.mark.asyncio
-class TestSignup:
-    """Tests for user signup endpoint"""
+class TestSignupFlow:
+    """Integration tests for user signup endpoint"""
 
-    async def test_signup_with_valid_credentials(self, async_client: AsyncClient, session: AsyncSession):
-        """Test successful signup with valid email and password"""
+    async def test_signup_success_returns_token(self, async_client: AsyncClient):
+        """Test valid signup returns user data and JWT token"""
         response = await async_client.post(
             "/api/v1/auth/signup",
             json={
                 "email": "newuser@example.com",
-                "password": "securepassword123",
+                "password": "SecurePass123",
                 "name": "New User"
             }
         )
+
         assert response.status_code == 201
         data = response.json()
-        assert data["data"]["email"] == "newuser@example.com"
-        assert data["data"]["name"] == "New User"
-        assert "id" in data["data"]
-        assert data["error"] is None
 
-    async def test_signup_with_existing_email(self, async_client: AsyncClient, session: AsyncSession):
-        """Test signup with email that already exists"""
-        # First signup
-        await async_client.post(
-            "/api/v1/auth/signup",
-            json={
-                "email": "existing@example.com",
-                "password": "password123",
-                "name": "Existing User"
-            }
-        )
+        # Verify response structure
+        assert "id" in data
+        assert data["email"] == "newuser@example.com"
+        assert data["name"] == "New User"
+        assert "token" in data
+        assert "expiresIn" in data
+        assert data["expiresIn"] == 900  # 15 minutes
 
-        # Second signup with same email
+        # Verify token is valid JWT
+        token = data["token"]
+        assert isinstance(token, str)
+        assert len(token) > 100
+
+    async def test_signup_token_contains_valid_claims(self, async_client: AsyncClient):
+        """Test JWT token contains user_id (sub) and email claims"""
         response = await async_client.post(
             "/api/v1/auth/signup",
             json={
-                "email": "existing@example.com",
-                "password": "differentpassword",
-                "name": "Another User"
+                "email": "claims@example.com",
+                "password": "SecurePass123",
+                "name": "Claims User"
             }
         )
-        assert response.status_code == 400
-        assert "EMAIL_EXISTS" in response.json()["error"]["code"]
 
-    async def test_signup_with_weak_password(self, async_client: AsyncClient):
-        """Test signup with password less than 8 characters"""
-        response = await async_client.post(
-            "/api/v1/auth/signup",
-            json={
-                "email": "weak@example.com",
-                "password": "short",
-                "name": "Weak Password"
-            }
-        )
-        assert response.status_code == 400
-        assert "WEAK_PASSWORD" in response.json()["error"]["code"]
-
-    async def test_signup_with_invalid_email(self, async_client: AsyncClient):
-        """Test signup with invalid email format"""
-        response = await async_client.post(
-            "/api/v1/auth/signup",
-            json={
-                "email": "notanemail",
-                "password": "password123",
-                "name": "Invalid Email"
-            }
-        )
-        assert response.status_code == 400
-        assert "INVALID_EMAIL" in response.json()["error"]["code"]
-
-    async def test_signup_sets_jwt_cookie(self, async_client: AsyncClient):
-        """Test that signup sets JWT in httpOnly cookie"""
-        response = await async_client.post(
-            "/api/v1/auth/signup",
-            json={
-                "email": "cookie@example.com",
-                "password": "password123",
-                "name": "Cookie Test"
-            }
-        )
         assert response.status_code == 201
-        assert "jwt" in response.cookies
+        data = response.json()
+        token = data["token"]
+
+        # Decode and verify token claims
+        payload = verify_token(token)
+        assert payload["sub"] == data["id"]  # user_id in sub claim
+        assert payload["email"] == "claims@example.com"
+        assert payload["iss"] == "todo-app"
+        assert payload["aud"] == "todo-app-users"
+
+    async def test_signup_invalid_email_returns_400(self, async_client: AsyncClient):
+        """Test signup with invalid email format returns 400"""
+        invalid_emails = [
+            "notanemail",
+            "missing@domain",
+            "@nodomain.com",
+            "no-at-sign.com"
+        ]
+
+        for email in invalid_emails:
+            response = await async_client.post(
+                "/api/v1/auth/signup",
+                json={
+                    "email": email,
+                    "password": "SecurePass123",
+                    "name": "Test User"
+                }
+            )
+
+            # Pydantic validates email format, returns 422
+            assert response.status_code in [400, 422]
+
+    async def test_signup_weak_password_returns_400(self, async_client: AsyncClient):
+        """Test signup with weak password returns 400"""
+        weak_passwords = [
+            "short",  # Too short
+            "nouppercase1",  # No uppercase
+            "NOLOWERCASE1",  # No lowercase
+            "NoDigitsHere",  # No digits
+        ]
+
+        for password in weak_passwords:
+            response = await async_client.post(
+                "/api/v1/auth/signup",
+                json={
+                    "email": f"test{password}@example.com",
+                    "password": password,
+                    "name": "Test User"
+                }
+            )
+
+            assert response.status_code == 400
+            assert "password" in response.text.lower()
+
+    async def test_signup_duplicate_email_returns_409(self, async_client: AsyncClient, session: AsyncSession):
+        """Test signup with existing email returns 409 Conflict"""
+        # Create first user
+        await UserService.create_user(
+            session=session,
+            email="existing@example.com",
+            password="SecurePass123",
+            name="Existing User"
+        )
+        await session.commit()
+
+        # Attempt duplicate signup
+        response = await async_client.post(
+            "/api/v1/auth/signup",
+            json={
+                "email": "existing@example.com",
+                "password": "DifferentPass123",
+                "name": "Duplicate User"
+            }
+        )
+
+        assert response.status_code == 409
+        assert "already registered" in response.text.lower()
+
+    async def test_signup_password_hashed_in_database(self, async_client: AsyncClient, session: AsyncSession):
+        """Test password is hashed (not plaintext) in database"""
+        password = "PlainTextPass123"
+
+        response = await async_client.post(
+            "/api/v1/auth/signup",
+            json={
+                "email": "hashed@example.com",
+                "password": password,
+                "name": "Hashed User"
+            }
+        )
+
+        assert response.status_code == 201
+
+        # Retrieve user from database
+        user = await UserService.get_user_by_email(session, "hashed@example.com")
+        assert user is not None
+        assert user.password_hash != password  # Not plaintext
+        assert user.password_hash.startswith("$2b$")  # Bcrypt hash
+
+    async def test_signup_token_expiration_is_900_seconds(self, async_client: AsyncClient):
+        """Test token expires in 900 seconds (15 minutes)"""
+        response = await async_client.post(
+            "/api/v1/auth/signup",
+            json={
+                "email": "expiry@example.com",
+                "password": "SecurePass123",
+                "name": "Expiry User"
+            }
+        )
+
+        assert response.status_code == 201
+        data = response.json()
+        token = data["token"]
+
+        # Verify expiration time
+        payload = verify_token(token)
+        exp = payload["exp"]
+        iat = payload["iat"]
+
+        assert exp - iat == 900  # 15 minutes
+
+    async def test_signup_name_is_optional(self, async_client: AsyncClient):
+        """Test signup works without name field"""
+        response = await async_client.post(
+            "/api/v1/auth/signup",
+            json={
+                "email": "noname@example.com",
+                "password": "SecurePass123"
+            }
+        )
+
+        assert response.status_code == 201
+        data = response.json()
+        assert data["email"] == "noname@example.com"
+        # Name should be None or empty string
+        assert data.get("name") in [None, ""]
 
 
 @pytest.mark.asyncio
-class TestSignin:
-    """Tests for user signin endpoint"""
+class TestSigninFlow:
+    """Integration tests for user signin endpoint"""
 
-    async def test_signin_with_correct_credentials(self, async_client: AsyncClient):
-        """Test successful signin with correct email and password"""
-        # Create user
-        await async_client.post(
-            "/api/v1/auth/signup",
-            json={
-                "email": "signin@example.com",
-                "password": "correctpassword",
-                "name": "Signin User"
-            }
+    async def test_signin_success_returns_token(self, async_client: AsyncClient, session: AsyncSession):
+        """Test valid signin returns user data and JWT token"""
+        # Create user first
+        await UserService.create_user(
+            session=session,
+            email="signin@example.com",
+            password="SecurePass123",
+            name="Signin User"
         )
+        await session.commit()
 
         # Sign in
         response = await async_client.post(
             "/api/v1/auth/signin",
             json={
                 "email": "signin@example.com",
-                "password": "correctpassword"
+                "password": "SecurePass123"
             }
         )
+
         assert response.status_code == 200
         data = response.json()
-        assert data["data"]["email"] == "signin@example.com"
-        assert data["error"] is None
 
-    async def test_signin_with_wrong_password(self, async_client: AsyncClient):
-        """Test signin with correct email but wrong password"""
-        # Create user
-        await async_client.post(
-            "/api/v1/auth/signup",
-            json={
-                "email": "wrong@example.com",
-                "password": "correctpassword",
-                "name": "Wrong Password Test"
-            }
-        )
+        assert "id" in data
+        assert data["email"] == "signin@example.com"
+        assert data["name"] == "Signin User"
+        assert "token" in data
+        assert "expiresIn" in data
+        assert data["expiresIn"] == 900
 
-        # Try signin with wrong password
+    async def test_signin_invalid_email_returns_401(self, async_client: AsyncClient):
+        """Test signin with non-existent email returns 401"""
         response = await async_client.post(
             "/api/v1/auth/signin",
             json={
-                "email": "wrong@example.com",
-                "password": "wrongpassword"
+                "email": "notfound@example.com",
+                "password": "SecurePass123"
             }
         )
+
         assert response.status_code == 401
-        assert "INVALID_CREDENTIALS" in response.json()["error"]["code"]
+        assert "invalid" in response.text.lower()
 
-    async def test_signin_with_nonexistent_email(self, async_client: AsyncClient):
-        """Test signin with email that doesn't exist"""
-        response = await async_client.post(
-            "/api/v1/auth/signin",
-            json={
-                "email": "nonexistent@example.com",
-                "password": "anypassword"
-            }
-        )
-        assert response.status_code == 401
-        assert "INVALID_CREDENTIALS" in response.json()["error"]["code"]
-
-    async def test_signin_sets_jwt_cookie(self, async_client: AsyncClient):
-        """Test that signin sets JWT in httpOnly cookie"""
+    async def test_signin_wrong_password_returns_401(self, async_client: AsyncClient, session: AsyncSession):
+        """Test signin with wrong password returns 401"""
         # Create user
-        await async_client.post(
-            "/api/v1/auth/signup",
-            json={
-                "email": "signin_cookie@example.com",
-                "password": "password123",
-                "name": "Signin Cookie Test"
-            }
+        await UserService.create_user(
+            session=session,
+            email="wrongpass@example.com",
+            password="CorrectPass123",
+            name="Wrong Pass User"
         )
+        await session.commit()
 
-        # Sign in
+        # Attempt signin with wrong password
         response = await async_client.post(
             "/api/v1/auth/signin",
             json={
-                "email": "signin_cookie@example.com",
-                "password": "password123"
+                "email": "wrongpass@example.com",
+                "password": "WrongPassword123"
             }
         )
-        assert response.status_code == 200
-        assert "jwt" in response.cookies
+
+        assert response.status_code == 401
+        assert "invalid" in response.text.lower()
 
 
 @pytest.mark.asyncio
-class TestSignout:
-    """Tests for user signout endpoint"""
+class TestTokenSecurity:
+    """Integration tests for token security and validation"""
 
-    async def test_signout_clears_jwt_cookie(self, async_client: AsyncClient):
-        """Test that signout clears JWT cookie"""
-        # Create and sign in user
-        signup_response = await async_client.post(
+    async def test_token_is_returned_in_response_body(self, async_client: AsyncClient):
+        """Test token is returned in response body"""
+        response = await async_client.post(
             "/api/v1/auth/signup",
             json={
-                "email": "signout@example.com",
-                "password": "password123",
-                "name": "Signout Test"
+                "email": "tokentest@example.com",
+                "password": "SecurePass123",
+                "name": "Token Test"
             }
         )
-        assert signup_response.status_code == 201
 
-        # Sign out
-        response = await async_client.post("/api/v1/auth/signout")
-        assert response.status_code == 200
+        assert response.status_code == 201
         data = response.json()
-        assert data["error"] is None
+
+        # Token is in response body (client will store securely)
+        assert "token" in data
+
+    async def test_signup_does_not_expose_password_in_response(self, async_client: AsyncClient):
+        """Test password is never returned in response"""
+        response = await async_client.post(
+            "/api/v1/auth/signup",
+            json={
+                "email": "nopassword@example.com",
+                "password": "SecurePass123",
+                "name": "No Password"
+            }
+        )
+
+        assert response.status_code == 201
+        data = response.json()
+
+        # Password should never be in response
+        assert "password" not in data
+        assert "password_hash" not in data
+
+    async def test_token_claims_match_user_data(self, async_client: AsyncClient):
+        """Test token claims (sub, email) match returned user data"""
+        response = await async_client.post(
+            "/api/v1/auth/signup",
+            json={
+                "email": "matchclaims@example.com",
+                "password": "SecurePass123",
+                "name": "Match Claims"
+            }
+        )
+
+        assert response.status_code == 201
+        data = response.json()
+
+        token = data["token"]
+        payload = verify_token(token)
+
+        # Verify claims match response data
+        assert payload["sub"] == data["id"]
+        assert payload["email"] == data["email"]
