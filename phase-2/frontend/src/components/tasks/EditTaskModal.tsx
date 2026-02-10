@@ -80,12 +80,15 @@ export function EditTaskModal({
 
       if (response.error) {
         setGeneralError(response.error.message || 'Failed to update task');
+        setIsSubmitting(false);
       } else {
-        onTaskUpdated();
+        // Brief delay for visual feedback before closing
+        setTimeout(() => {
+          onTaskUpdated();
+        }, 300);
       }
     } catch (error) {
       setGeneralError('An unexpected error occurred');
-    } finally {
       setIsSubmitting(false);
     }
   };

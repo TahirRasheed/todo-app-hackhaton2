@@ -78,12 +78,15 @@ export function CreateTaskModal({
 
       if (response.error) {
         setGeneralError(response.error.message || 'Failed to create task');
+        setIsSubmitting(false);
       } else {
-        onTaskCreated();
+        // Brief delay for visual feedback before closing
+        setTimeout(() => {
+          onTaskCreated();
+        }, 300);
       }
     } catch (error) {
       setGeneralError('An unexpected error occurred');
-    } finally {
       setIsSubmitting(false);
     }
   };

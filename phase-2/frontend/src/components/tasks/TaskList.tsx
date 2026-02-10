@@ -8,6 +8,7 @@ import { getTasks } from '@/lib/api';
 import { TaskCard } from './TaskCard';
 import { CreateTaskModal } from './CreateTaskModal';
 import { ErrorAlert } from '../ui/ErrorAlert';
+import { TaskListSkeleton } from '../ui/TaskSkeleton';
 
 interface TaskListProps {
   userId: string;
@@ -84,8 +85,16 @@ export function TaskList({ userId }: TaskListProps) {
 
   if (isLoading) {
     return (
-      <div className="flex items-center justify-center py-12">
-        <div className="animate-pulse text-gray-600">Loading tasks...</div>
+      <div>
+        <div className="mb-6 flex justify-between items-center">
+          <h2 className="text-xl font-semibold text-gray-900">
+            Tasks
+          </h2>
+          <div className="px-4 py-2 bg-blue-600 text-white rounded-md font-medium opacity-50 cursor-not-allowed">
+            + Create Task
+          </div>
+        </div>
+        <TaskListSkeleton />
       </div>
     );
   }
