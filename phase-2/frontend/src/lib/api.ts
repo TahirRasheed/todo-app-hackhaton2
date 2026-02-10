@@ -1,152 +1,156 @@
-/**
- * API Client with JWT Token Management
- * 
- * Automatically attaches JWT tokens from httpOnly cookies to all requests.
- * Handles 401 responses by redirecting to signin.
- */
+// T016-T017: Centralized API Client Wrapper & Type-Safe Helpers
 
-import axios, { AxiosInstance, AxiosError, AxiosResponse } from 'axios';
+import { ApiResponse, ApiError } from '@/types/api';
+import { AuthResponse, SignupRequest, SigninRequest } from '@/types/auth';
+import { Task, TaskListResponse, TaskCreateInput, TaskUpdateInput } from '@/types/task';
+import { getToken } from './storage';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
-// Create axios instance with credentials enabled
-const api: AxiosInstance = axios.create({
-  baseURL: API_URL,
-  withCredentials: true, // Include httpOnly cookies in requests
-  headers: {
+// T016: Core API call wrapper
+export async function apiCall<T>(
+  endpoint: string,
+  options: RequestInit & { requiresAuth?: boolean } = {}
+): Promise<ApiResponse<T>> {
+  const { requiresAuth = true, ...fetchOptions } = options;
+
+  // Prepare headers
+  const headers: HeadersInit = {
     'Content-Type': 'application/json',
-  },
-});
+    ...fetchOptions.headers,
+  };
 
-// Request interceptor: Add token to Authorization header if present
-api.interceptors.request.use(
-  (config) => {
-    // Get token from localStorage and attach to Authorization header
-    if (typeof window !== 'undefined') {
-      const token = localStorage.getItem('token');
-      if (token) {
-        config.headers.Authorization = `Bearer ${token}`;
-      }
+  // Attach JWT token if required
+  if (requiresAuth) {
+    const token = getToken();
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
     }
-    return config;
-  },
-  (error) => {
-    return Promise.reject(error);
   }
-);
 
-// Response interceptor: Handle 401 (token expired/invalid)
-api.interceptors.response.use(
-  (response: AxiosResponse) => {
-    return response;
-  },
-  (error: AxiosError) => {
-    if (error.response?.status === 401) {
-      // Token expired or invalid - clear localStorage and redirect to signin
+  try {
+    const response = await fetch(`${API_URL}${endpoint}`, {
+      ...fetchOptions,
+      headers,
+    });
+
+    const data: ApiResponse<T> = await response.json();
+
+    // Handle 401 Unauthorized - redirect to signin
+    if (response.status === 401) {
       if (typeof window !== 'undefined') {
-        localStorage.removeItem('token');
-        localStorage.removeItem('user');
-        window.location.href = '/auth/signin';
+        window.location.href = '/signin';
       }
+      return {
+        data: null,
+        meta: { timestamp: new Date().toISOString(), request_id: '' },
+        error: { code: 'UNAUTHORIZED', message: 'Your session has expired. Please sign in again.' },
+      };
     }
-    return Promise.reject(error);
-  }
-);
 
-export default api;
+    // Handle 403 Forbidden
+    if (response.status === 403) {
+      return {
+        data: null,
+        meta: { timestamp: new Date().toISOString(), request_id: '' },
+        error: { code: 'FORBIDDEN', message: "You don't have permission to access this resource." },
+      };
+    }
 
-/**
- * Helper function to extract error message from API response
- */
-export function getErrorMessage(error: unknown): string {
-  if (axios.isAxiosError(error)) {
-    return (
-      (error.response?.data as any)?.detail ||
-      error.message ||
-      'An error occurred'
-    );
+    return data;
+  } catch (error) {
+    console.error('API call failed:', error);
+    return {
+      data: null,
+      meta: { timestamp: new Date().toISOString(), request_id: '' },
+      error: {
+        code: 'NETWORK_ERROR',
+        message: 'Unable to connect. Please check your internet connection.',
+      },
+    };
   }
-  return 'An unexpected error occurred';
 }
 
-/**
- * User token response from auth endpoints
- */
-export interface UserTokenResponse {
-  id: string
-  email: string
-  name?: string
-  token: string
-  expiresIn: number
-}
+// T017: Type-safe API helpers
 
-/**
- * Helper function for signup API call
- */
-export async function signupUser(
+export async function signup(
   email: string,
   password: string,
-  name?: string
-): Promise<UserTokenResponse> {
-  const response = await api.post<UserTokenResponse>('/api/v1/auth/signup', {
-    email,
-    password,
-    name,
+  name: string
+): Promise<ApiResponse<AuthResponse>> {
+  const request: SignupRequest = { email, password, name };
+  return apiCall<AuthResponse>('/api/v1/auth/signup', {
+    method: 'POST',
+    body: JSON.stringify(request),
+    requiresAuth: false,
   });
-  return response.data;
 }
 
-/**
- * Helper function for signin API call
- */
-export async function signinUser(
+export async function signin(
   email: string,
   password: string
-): Promise<UserTokenResponse> {
-  const response = await api.post<UserTokenResponse>('/api/v1/auth/signin', {
-    email,
-    password,
+): Promise<ApiResponse<AuthResponse>> {
+  const request: SigninRequest = { email, password };
+  return apiCall<AuthResponse>('/api/v1/auth/signin', {
+    method: 'POST',
+    body: JSON.stringify(request),
+    requiresAuth: false,
   });
-  return response.data;
 }
 
-/**
- * Helper function for signout API call
- *
- * Requires valid JWT token in Authorization header.
- * Clears token from localStorage after successful signout.
- */
-export async function signoutUser(): Promise<void> {
-  // Get token from localStorage to include in request
-  const token = typeof window !== 'undefined' ? localStorage.getItem('token') : null;
-
-  if (!token) {
-    throw new Error('No authentication token found');
-  }
-
-  // Call signout endpoint with token in Authorization header
-  await api.post('/api/v1/auth/signout', {}, {
-    headers: {
-      Authorization: `Bearer ${token}`,
-    },
+export async function signout(): Promise<ApiResponse<{ message: string }>> {
+  return apiCall<{ message: string }>('/api/v1/auth/signout', {
+    method: 'POST',
+    body: JSON.stringify({}),
+    requiresAuth: true,
   });
-
-  // Clear token from localStorage on success
-  if (typeof window !== 'undefined') {
-    localStorage.removeItem('token');
-    localStorage.removeItem('user');
-  }
 }
 
-/**
- * Helper function to get user's tasks
- */
-export async function getUserTasks(
+export async function getTasks(
   userId: string,
   skip: number = 0,
   limit: number = 20
-) {
-  return api.get(`/users/${userId}/tasks`, {
-    params: { skip, limit },
+): Promise<ApiResponse<TaskListResponse>> {
+  return apiCall<TaskListResponse>(
+    `/api/v1/users/${userId}/tasks?skip=${skip}&limit=${limit}`,
+    {
+      method: 'GET',
+      requiresAuth: true,
+    }
+  );
+}
+
+export async function createTask(
+  userId: string,
+  title: string,
+  description?: string
+): Promise<ApiResponse<Task>> {
+  const request: TaskCreateInput = { title, description };
+  return apiCall<Task>(`/api/v1/users/${userId}/tasks`, {
+    method: 'POST',
+    body: JSON.stringify(request),
+    requiresAuth: true,
+  });
+}
+
+export async function updateTask(
+  userId: string,
+  taskId: string,
+  updates: Partial<TaskUpdateInput>
+): Promise<ApiResponse<Task>> {
+  return apiCall<Task>(`/api/v1/users/${userId}/tasks/${taskId}`, {
+    method: 'PUT',
+    body: JSON.stringify(updates),
+    requiresAuth: true,
+  });
+}
+
+export async function deleteTask(
+  userId: string,
+  taskId: string
+): Promise<ApiResponse<null>> {
+  return apiCall<null>(`/api/v1/users/${userId}/tasks/${taskId}`, {
+    method: 'DELETE',
+    requiresAuth: true,
   });
 }

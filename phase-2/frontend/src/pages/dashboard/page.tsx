@@ -14,14 +14,14 @@ export default function DashboardPage() {
 
   useEffect(() => {
     if (!isLoading && !isAuthenticated) {
-      router.push('/auth/signin');
+      router.push('/signin');
     }
   }, [isAuthenticated, isLoading, router]);
 
   const handleLogout = async () => {
     try {
       await logout();
-      router.push('/auth/signin');
+      router.push('/signin');
     } catch (err) {
       setError('Failed to logout');
     }

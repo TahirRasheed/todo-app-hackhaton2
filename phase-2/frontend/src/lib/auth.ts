@@ -1,50 +1,70 @@
-/**
- * Better Auth setup and initialization
- */
-import { betterAuth } from 'better-auth/react'
+// T015: Auth Utility Functions
 
-const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
+import { User } from '@/types/auth';
+import { getCookie, setCookie, deleteCookie } from './storage';
 
-// Initialize Better Auth client with JWT plugin enabled
-export const auth = betterAuth({
-  baseURL: apiUrl,
-  basePathToken: '/api/v1/auth',
-  plugins: [
-    // JWT plugin for token-based authentication
-  ],
-})
+const USER_STORAGE_KEY = 'user';
 
-// Extract methods from better-auth for use in components
-export const {
-  useSession,
-  sessionAtom,
-} = auth
-
-// Helper function to get current session
-export async function getSession() {
-  try {
-    const response = await fetch(`${apiUrl}/api/v1/auth/me`, {
-      credentials: 'include',
-    })
-    if (response.ok) {
-      return response.json()
-    }
-  } catch (error) {
-    console.error('Failed to fetch session:', error)
+export function isAuthenticated(): boolean {
+  if (typeof window === 'undefined') {
+    return false;
   }
-  return null
+  return !!getCookie('token');
 }
 
-// Helper function to sign out
-export async function signOut() {
-  try {
-    const response = await fetch(`${apiUrl}/api/v1/auth/signout`, {
-      method: 'POST',
-      credentials: 'include',
-    })
-    return response.ok
-  } catch (error) {
-    console.error('Failed to sign out:', error)
-    return false
+export function getToken(): string | null {
+  if (typeof window === 'undefined') {
+    return null;
   }
+  return getCookie('token');
+}
+
+export function setToken(token: string): void {
+  if (typeof window !== 'undefined') {
+    setCookie('token', token, {
+      maxAge: 15 * 60, // 15 minutes
+      path: '/',
+      sameSite: 'Lax',
+    });
+  }
+}
+
+export function clearToken(): void {
+  if (typeof window !== 'undefined') {
+    deleteCookie('token');
+  }
+}
+
+export function getUser(): User | null {
+  if (typeof window === 'undefined') {
+    return null;
+  }
+
+  try {
+    const userJson = localStorage.getItem(USER_STORAGE_KEY);
+    if (userJson) {
+      return JSON.parse(userJson);
+    }
+  } catch (error) {
+    console.error('Failed to parse user from localStorage:', error);
+  }
+
+  return null;
+}
+
+export function setUser(user: User): void {
+  if (typeof window !== 'undefined') {
+    localStorage.setItem(USER_STORAGE_KEY, JSON.stringify(user));
+  }
+}
+
+export function clearUser(): void {
+  if (typeof window !== 'undefined') {
+    localStorage.removeItem(USER_STORAGE_KEY);
+  }
+}
+
+export function logout(): void {
+  clearToken();
+  clearUser();
 }

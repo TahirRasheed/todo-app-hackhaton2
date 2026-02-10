@@ -1,0 +1,9 @@
+Switched to a new branch '003-frontend-ui'
+C:\Users\tahir.rasheed\Desktop\todo-app-hackhaton2\phase-2\.specify\scripts\powershell\create-new-feature.ps1 : A 
+positional parameter cannot be found that accepts argument 'prompts'.
+At line:1 char:1
++ .specify/scripts/powershell/create-new-feature.ps1 -Json -Number 3 -S ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : InvalidArgument: (:) [create-new-feature.ps1], ParameterBindingException
+    + FullyQualifiedErrorId : PositionalParameterNotFound,create-new-feature.ps1
+ 

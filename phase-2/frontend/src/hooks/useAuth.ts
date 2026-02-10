@@ -1,86 +1,115 @@
-/**
- * useAuth Hook
- * 
- * Provides authentication context and utility functions.
- * Manages current user state and logout functionality.
- */
+// T013: Custom Auth Hook
 
 'use client';
 
-import { useCallback, useState } from 'react';
-import { useRouter } from 'next/navigation';
-import { signoutUser } from '@/lib/api';
+import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import { User, AuthContextType } from '@/types/auth';
+import * as authApi from '@/lib/api';
+import * as authUtils from '@/lib/auth';
 
-export interface AuthUser {
-  id: string;
-  email: string;
-  name?: string;
-}
+const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-export function useAuth() {
-  const router = useRouter();
-  const [user, setUser] = useState<AuthUser | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
+export function AuthProvider({ children }: { children: ReactNode }) {
+  const [user, setUser] = useState<User | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  /**
-   * Set the current user after successful authentication
-   */
-  const setCurrentUser = useCallback((userData: AuthUser) => {
-    setUser(userData);
-    setError(null);
-  }, []);
-
-  /**
-   * Clear the current user and error state
-   */
-  const clearUser = useCallback(() => {
-    setUser(null);
-    setError(null);
-  }, []);
-
-  /**
-   * Logout the current user
-   */
-  const logout = useCallback(async () => {
-    setIsLoading(true);
-    try {
-      await signoutUser();
-      clearUser();
-      router.push('/auth/signin');
-    } catch (err: any) {
-      setError(err.message || 'Failed to logout');
-      // Still clear user and redirect on error
-      clearUser();
-      router.push('/auth/signin');
-    } finally {
-      setIsLoading(false);
+  // Initialize auth state on mount
+  useEffect(() => {
+    const storedUser = authUtils.getUser();
+    if (storedUser && authUtils.isAuthenticated()) {
+      setUser(storedUser);
     }
-  }, [clearUser, router]);
-
-  /**
-   * Set error message
-   */
-  const setAuthError = useCallback((errorMessage: string) => {
-    setError(errorMessage);
+    setIsLoading(false);
   }, []);
 
-  /**
-   * Clear error message
-   */
-  const clearError = useCallback(() => {
-    setError(null);
-  }, []);
+  const login = async (email: string, password: string) => {
+    try {
+      setError(null);
+      const response = await authApi.signin(email, password);
 
-  return {
-    user,
-    isLoading,
-    error,
-    setCurrentUser,
-    clearUser,
-    logout,
-    setAuthError,
-    clearError,
-    isAuthenticated: !!user,
+      if (response.error) {
+        setError(response.error.message);
+        throw new Error(response.error.message);
+      }
+
+      if (response.data) {
+        authUtils.setToken(response.data.token);
+        const userData: User = {
+          id: response.data.id,
+          email: response.data.email,
+          name: response.data.name,
+        };
+        authUtils.setUser(userData);
+        setUser(userData);
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Login failed';
+      setError(message);
+      throw err;
+    }
   };
+
+  const signup = async (email: string, password: string, name: string) => {
+    try {
+      setError(null);
+      const response = await authApi.signup(email, password, name);
+
+      if (response.error) {
+        setError(response.error.message);
+        throw new Error(response.error.message);
+      }
+
+      if (response.data) {
+        authUtils.setToken(response.data.token);
+        const userData: User = {
+          id: response.data.id,
+          email: response.data.email,
+          name: response.data.name,
+        };
+        authUtils.setUser(userData);
+        setUser(userData);
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Signup failed';
+      setError(message);
+      throw err;
+    }
+  };
+
+  const logout = async () => {
+    try {
+      await authApi.signout();
+    } catch (err) {
+      console.error('Logout API failed:', err);
+    } finally {
+      authUtils.logout();
+      setUser(null);
+      setError(null);
+    }
+  };
+
+  return (
+    <AuthContext.Provider
+      value={{
+        user,
+        isAuthenticated: !!user && authUtils.isAuthenticated(),
+        isLoading,
+        error,
+        login,
+        signup,
+        logout,
+      }}
+    >
+      {children}
+    </AuthContext.Provider>
+  );
+}
+
+export function useAuth(): AuthContextType {
+  const context = useContext(AuthContext);
+  if (context === undefined) {
+    throw new Error('useAuth must be used within an AuthProvider');
+  }
+  return context;
 }
