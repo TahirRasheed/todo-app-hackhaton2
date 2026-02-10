@@ -3,10 +3,11 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Task, TaskListResponse } from '@/types/task';
+import { Task } from '@/types/task';
 import { getTasks } from '@/lib/api';
 import { TaskCard } from './TaskCard';
 import { CreateTaskModal } from './CreateTaskModal';
+import { ErrorAlert } from '../ui/ErrorAlert';
 
 interface TaskListProps {
   userId: string;
@@ -92,9 +93,16 @@ export function TaskList({ userId }: TaskListProps) {
   return (
     <div>
       {error && (
-        <div className="mb-4 p-4 bg-red-50 border border-red-200 rounded-md">
-          <p className="text-red-700 text-sm">{error}</p>
-        </div>
+        <ErrorAlert
+          message={error}
+          onDismiss={() => setError(null)}
+          onRetry={() => {
+            setSkip(0);
+            setError(null);
+          }}
+          isDismissible={true}
+          autoClose={8000}
+        />
       )}
 
       <div className="mb-6 flex justify-between items-center">
@@ -119,10 +127,16 @@ export function TaskList({ userId }: TaskListProps) {
 
       {tasks.length === 0 ? (
         <div className="text-center py-12">
-          <p className="text-gray-500 text-lg">No tasks yet. Create one to get started!</p>
+          <div className="text-gray-400 mb-3">
+            <svg className="w-12 h-12 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+          </div>
+          <p className="text-gray-500 text-lg font-medium">No tasks yet</p>
+          <p className="text-gray-400 text-sm">Create one to get started!</p>
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {tasks.map((task) => (
             <TaskCard
               key={task.id}
@@ -136,27 +150,32 @@ export function TaskList({ userId }: TaskListProps) {
       )}
 
       {/* Pagination */}
-      <div className="mt-8 flex justify-between items-center">
-        <button
-          onClick={() => setSkip(Math.max(0, skip - TASKS_PER_PAGE))}
-          disabled={skip === 0}
-          className="px-4 py-2 bg-gray-200 text-gray-700 rounded-md font-medium hover:bg-gray-300 disabled:opacity-50 disabled:cursor-not-allowed transition"
-        >
-          Previous
-        </button>
+      {total > TASKS_PER_PAGE && (
+        <div className="mt-8 flex flex-col sm:flex-row justify-between items-center gap-4 bg-gray-50 p-4 rounded-lg">
+          <button
+            onClick={() => setSkip(Math.max(0, skip - TASKS_PER_PAGE))}
+            disabled={skip === 0}
+            className="w-full sm:w-auto px-4 py-2 bg-gray-200 text-gray-700 rounded-md font-medium hover:bg-gray-300 disabled:opacity-50 disabled:cursor-not-allowed active:bg-gray-400 transition"
+          >
+            ← Previous
+          </button>
 
-        <span className="text-gray-600 text-sm">
-          Showing {skip + 1} to {Math.min(skip + TASKS_PER_PAGE, total)} of {total}
-        </span>
+          <span className="text-gray-600 text-sm text-center">
+            Page {Math.floor(skip / TASKS_PER_PAGE) + 1} of {Math.ceil(total / TASKS_PER_PAGE)}
+            <span className="block text-xs text-gray-500 mt-1">
+              {skip + 1}–{Math.min(skip + TASKS_PER_PAGE, total)} of {total} tasks
+            </span>
+          </span>
 
-        <button
-          onClick={() => setSkip(skip + TASKS_PER_PAGE)}
-          disabled={skip + TASKS_PER_PAGE >= total}
-          className="px-4 py-2 bg-gray-200 text-gray-700 rounded-md font-medium hover:bg-gray-300 disabled:opacity-50 disabled:cursor-not-allowed transition"
-        >
-          Next
-        </button>
-      </div>
+          <button
+            onClick={() => setSkip(skip + TASKS_PER_PAGE)}
+            disabled={skip + TASKS_PER_PAGE >= total}
+            className="w-full sm:w-auto px-4 py-2 bg-gray-200 text-gray-700 rounded-md font-medium hover:bg-gray-300 disabled:opacity-50 disabled:cursor-not-allowed active:bg-gray-400 transition"
+          >
+            Next →
+          </button>
+        </div>
+      )}
     </div>
   );
 }

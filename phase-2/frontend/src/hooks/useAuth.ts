@@ -2,7 +2,7 @@
 
 'use client';
 
-import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import { createContext, useContext, useState, useEffect, ReactNode, createElement } from 'react';
 import { User, AuthContextType } from '@/types/auth';
 import * as authApi from '@/lib/api';
 import * as authUtils from '@/lib/auth';
@@ -89,20 +89,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   };
 
-  return (
-    <AuthContext.Provider
-      value={{
-        user,
-        isAuthenticated: !!user && authUtils.isAuthenticated(),
-        isLoading,
-        error,
-        login,
-        signup,
-        logout,
-      }}
-    >
-      {children}
-    </AuthContext.Provider>
+  const contextValue: AuthContextType = {
+    user,
+    isAuthenticated: !!user && authUtils.isAuthenticated(),
+    isLoading,
+    error,
+    login,
+    signup,
+    logout,
+  };
+
+  return createElement(
+    AuthContext.Provider,
+    { value: contextValue },
+    children
   );
 }
 

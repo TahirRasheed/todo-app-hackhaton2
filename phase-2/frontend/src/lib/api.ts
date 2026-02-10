@@ -1,6 +1,6 @@
 // T016-T017: Centralized API Client Wrapper & Type-Safe Helpers
 
-import { ApiResponse, ApiError } from '@/types/api';
+import { ApiResponse } from '@/types/api';
 import { AuthResponse, SignupRequest, SigninRequest } from '@/types/auth';
 import { Task, TaskListResponse, TaskCreateInput, TaskUpdateInput } from '@/types/task';
 import { getToken } from './storage';
@@ -15,17 +15,24 @@ export async function apiCall<T>(
   const { requiresAuth = true, ...fetchOptions } = options;
 
   // Prepare headers
-  const headers: HeadersInit = {
+  const headers: HeadersInit = new Headers({
     'Content-Type': 'application/json',
-    ...fetchOptions.headers,
-  };
+  });
 
   // Attach JWT token if required
   if (requiresAuth) {
     const token = getToken();
     if (token) {
-      headers['Authorization'] = `Bearer ${token}`;
+      headers.set('Authorization', `Bearer ${token}`);
     }
+  }
+
+  // Merge with provided headers if any
+  if (fetchOptions.headers) {
+    const providedHeaders = fetchOptions.headers instanceof Headers ? fetchOptions.headers : new Headers(fetchOptions.headers as Record<string, string>);
+    providedHeaders.forEach((value, key) => {
+      headers.set(key, value);
+    });
   }
 
   try {
@@ -34,9 +41,30 @@ export async function apiCall<T>(
       headers,
     });
 
-    const data: ApiResponse<T> = await response.json();
+    let data: ApiResponse<T>;
+    try {
+      data = await response.json();
+    } catch {
+      // Handle non-JSON responses
+      data = {
+        data: null,
+        meta: { timestamp: new Date().toISOString(), request_id: '' },
+        error: { code: 'PARSE_ERROR', message: 'Invalid response from server' },
+      };
+    }
 
-    // Handle 401 Unauthorized - redirect to signin
+    // Handle specific HTTP status codes with user-friendly messages
+    if (response.status === 400) {
+      return {
+        data: null,
+        meta: { timestamp: new Date().toISOString(), request_id: '' },
+        error: {
+          code: 'BAD_REQUEST',
+          message: data.error?.message || 'Invalid input. Please check your data.',
+        },
+      };
+    }
+
     if (response.status === 401) {
       if (typeof window !== 'undefined') {
         window.location.href = '/signin';
@@ -44,16 +72,54 @@ export async function apiCall<T>(
       return {
         data: null,
         meta: { timestamp: new Date().toISOString(), request_id: '' },
-        error: { code: 'UNAUTHORIZED', message: 'Your session has expired. Please sign in again.' },
+        error: {
+          code: 'UNAUTHORIZED',
+          message: 'Your session has expired. Please sign in again.',
+        },
       };
     }
 
-    // Handle 403 Forbidden
     if (response.status === 403) {
       return {
         data: null,
         meta: { timestamp: new Date().toISOString(), request_id: '' },
-        error: { code: 'FORBIDDEN', message: "You don't have permission to access this resource." },
+        error: {
+          code: 'FORBIDDEN',
+          message: "You don't have permission to perform this action.",
+        },
+      };
+    }
+
+    if (response.status === 404) {
+      return {
+        data: null,
+        meta: { timestamp: new Date().toISOString(), request_id: '' },
+        error: {
+          code: 'NOT_FOUND',
+          message: 'The requested resource was not found.',
+        },
+      };
+    }
+
+    if (response.status === 409) {
+      return {
+        data: null,
+        meta: { timestamp: new Date().toISOString(), request_id: '' },
+        error: {
+          code: 'CONFLICT',
+          message: data.error?.message || 'This resource already exists or has been modified.',
+        },
+      };
+    }
+
+    if (response.status >= 500) {
+      return {
+        data: null,
+        meta: { timestamp: new Date().toISOString(), request_id: '' },
+        error: {
+          code: 'SERVER_ERROR',
+          message: 'Server error. Please try again later.',
+        },
       };
     }
 
@@ -65,7 +131,7 @@ export async function apiCall<T>(
       meta: { timestamp: new Date().toISOString(), request_id: '' },
       error: {
         code: 'NETWORK_ERROR',
-        message: 'Unable to connect. Please check your internet connection.',
+        message: 'Unable to connect. Please check your internet connection and try again.',
       },
     };
   }
